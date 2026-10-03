@@ -4,6 +4,7 @@ import {
   canonicalWatchUrl,
   InvalidVideoIdError,
   parseVideoId,
+  playlistIdOf,
 } from "../src/youtube/video-id.js";
 
 const ID = "45K3zHckCnQ";
@@ -41,5 +42,30 @@ describe("parseVideoId", () => {
 describe("canonicalWatchUrl", () => {
   it("builds a canonical watch URL", () => {
     expect(canonicalWatchUrl(ID)).toBe(`https://www.youtube.com/watch?v=${ID}`);
+  });
+});
+
+describe("playlistIdOf", () => {
+  const LIST = "PLrAXtmRdnEQy6nuLMHjMZOz59Oq1M6MNA";
+
+  it("finds the playlist id in a playlist URL", () => {
+    expect(playlistIdOf(`https://www.youtube.com/playlist?list=${LIST}`)).toBe(LIST);
+  });
+
+  it("finds the playlist id when the URL also has a video", () => {
+    expect(playlistIdOf(`https://www.youtube.com/watch?v=${ID}&list=${LIST}`)).toBe(LIST);
+  });
+
+  it("finds the playlist id in a scheme-less string", () => {
+    expect(playlistIdOf(`watch?v=${ID}&list=${LIST}`)).toBe(LIST);
+  });
+
+  it("returns undefined for a plain video URL", () => {
+    expect(playlistIdOf(`https://youtu.be/${ID}`)).toBeUndefined();
+    expect(playlistIdOf(`https://www.youtube.com/watch?v=${ID}`)).toBeUndefined();
+  });
+
+  it("returns undefined for unparseable input", () => {
+    expect(playlistIdOf("not a url")).toBeUndefined();
   });
 });

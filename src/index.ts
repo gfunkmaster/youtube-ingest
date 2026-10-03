@@ -13,6 +13,7 @@ import { buildSystemPrompt, buildUserPrompt } from "./prompts.js";
 import { createVaultTools } from "./tools/vault.js";
 import { createYoutubeTools } from "./tools/youtube.js";
 import { VIDEO_NOTES_SUBDIR } from "./vault/paths.js";
+import { parseVideoId, playlistIdOf } from "./youtube/video-id.js";
 import { errorMessage } from "./util.js";
 
 const USAGE = `youtube-ingest — för in en YouTube-video som källnot i Second Brain
@@ -145,6 +146,34 @@ async function main(): Promise<number> {
   if (cli.help || !cli.url) {
     process.stdout.write(`${USAGE}\n`);
     return cli.help ? 0 : 2;
+  }
+
+  // A URL can carry a playlist (`list=...`). Either it has no video at all —
+  // which this app cannot handle — or it has one, in which case say plainly that
+  // the rest of the playlist is ignored rather than dropping it silently.
+  const playlistId = playlistIdOf(cli.url);
+  let videoId: string | undefined;
+  try {
+    videoId = parseVideoId(cli.url);
+  } catch {
+    videoId = undefined;
+  }
+
+  if (!videoId) {
+    process.stderr.write(
+      playlistId
+        ? `Det här är en spellista (list=${playlistId}), inte en enskild video.\n` +
+            "Spellistor stöds inte ännu — klistra in en video-URL i stället.\n"
+        : `Hittade inget YouTube-video-ID i: ${cli.url}\n`,
+    );
+    return 2;
+  }
+
+  if (playlistId) {
+    process.stderr.write(
+      `OBS: URL:en innehåller en spellista (list=${playlistId}). Bara videon ` +
+        `${videoId} förs in — resten av spellistan ignoreras.\n\n`,
+    );
   }
 
   let config: AppConfig;

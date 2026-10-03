@@ -72,3 +72,20 @@ export function parseVideoId(input: string): string {
 export function canonicalWatchUrl(videoId: string): string {
   return `https://www.youtube.com/watch?v=${videoId}`;
 }
+
+/**
+ * The playlist id in a URL, if it carries one (`?list=...`). A `watch?v=X&list=Y`
+ * URL has BOTH a video and a playlist; callers must decide what to do about that
+ * rather than silently dropping one of them.
+ */
+export function playlistIdOf(input: string): string | undefined {
+  const value = input.trim();
+  try {
+    const url = new URL(value.startsWith("http") ? value : `https://${value}`);
+    const list = url.searchParams.get("list");
+    return list && list.length > 0 ? list : undefined;
+  } catch {
+    const match = /[?&]list=([A-Za-z0-9_-]+)/.exec(value);
+    return match?.[1];
+  }
+}
