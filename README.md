@@ -19,12 +19,15 @@ siffror eller säkerhetsutfall"*.
 
 ## Verktyg
 
-| Verktyg | Beskrivning |
-|---|---|
-| `check_vault_for_video` | Finns redan en not för video-ID:t? (idempotent) |
-| `fetch_youtube_metadata` | Titel/kanal/thumbnail via oEmbed (**ingen API-nyckel**) |
-| `fetch_youtube_transcript` | Transkript som en textsträng (officiell nyckel krävs ej) |
-| `write_source_note` | Skriver den färdiga noten (`completesRun: true`) |
+| Verktyg | Beskrivning | Finns i MCP |
+|---|---|---|
+| `check_vault_for_video` | Finns redan en not för video-ID:t? (idempotent) | – |
+| `fetch_youtube_metadata` | Titel/kanal/thumbnail via oEmbed (**ingen API-nyckel**) | ✅ |
+| `fetch_youtube_transcript` | Transkript som en textsträng (officiell nyckel krävs ej) | ✅ |
+| `write_source_note` | Skriver den färdiga noten (`completesRun: true`) | – |
+
+MCP-servern exponerar de två **rent deterministiska** uppslagen. Filskrivningen
+ligger kvar hos CLI-agenten, som känner till valvets regler och mallar.
 
 ## Kom igång
 
@@ -114,6 +117,44 @@ tests/                   Vitest
   valvanteckningar är en sak — att publicera transkriptet som egen text (t.ex.
   YouTube→blogg) är en annan. Gör inte det utan att kontrollera rättigheterna.
 
+## MCP-server (Cline ⇄ YouTube i chatten)
+
+Samma två deterministiska uppslag finns också som en **MCP-server** över stdio, så
+att Cline (eller vilken MCP-klient som helst) kan anropa dem direkt i chatten.
+Servern återanvänder **exakt samma funktioner** som agent-verktygen — en
+implementation, två adaptrar — så beteendet kan inte glida isär.
+
+```bash
+npm run mcp          # startar MCP-servern på stdio
+npm run mcp:smoke    # startar den som subprocess och anropar verktygen (riktig stdio)
+```
+
+> En stdio-MCP-server får **aldrig** skriva till stdout (det är protokollkanalen).
+> Diagnostik går till stderr.
+
+### Koppla in i Cline
+
+Lägg till i `~/.cline/data/settings/cline_mcp_settings.json` (schemats stdio-form
+är `{ type: "stdio", command, args?, cwd?, env? }`):
+
+```json
+{
+  "mcpServers": {
+    "youtube": {
+      "transport": {
+        "type": "stdio",
+        "command": "node",
+        "args": ["--env-file-if-exists=.env", "--import", "tsx", "src/mcp/main.ts"],
+        "cwd": "/Users/elminnurkic/Documents/GitHub/youtube-ingest"
+      }
+    }
+  }
+}
+```
+
+Starta om Cline-sessionen. Verktygen dyker upp som `fetch_youtube_metadata` och
+`fetch_youtube_transcript`. Kräver **ingen API-nyckel** — bara `npm install`.
+
 ## Verifierat (kört, inte påstått)
 
 | Kontroll | Kommando | Resultat |
@@ -122,6 +163,8 @@ tests/                   Vitest
 | Enhets-/integrationstester | `npm test` | **34/34** (video-ID, notbygge, verktyg, agent-loop) |
 | Bygge | `npm run build` | rent (`dist/`) |
 | Live: metadata + transkript | `npm run smoke` | titel/kanal/thumbnail korrekt; transkript på **engelska**, 885 segment, 33 479 tecken |
+| MCP över riktig stdio | `npm run mcp:smoke` | båda verktygen listade; riktig metadata + engelskt transkript över protokollet |
+| MCP klient↔server | `npm test` (`tests/mcp.test.ts`) | 4 tester via `InMemoryTransport`, ingen nätverk/subprocess |
 | CLI-vägar | `--help`, ingen URL, okänd flagga, saknad nyckel | utskrift + exit-kod 0/2 som avsett |
 | Agent ↔ provider | `npm run dev` med nyckel | nådde API:t och visade `API key is invalid.` (nyckeln saknas/är ogiltig i denna miljö) |
 
@@ -135,6 +178,7 @@ provider-anropet är verifierat.
 
 ## Möjligt nästa steg
 
-- Paketera verktygen som en **MCP-server** (samma två verktyg, eller hela
-  ingest-flödet) så att Cline kan anropa dem direkt i chatten.
+- Exponera även hela ingest-flödet (inkl. `write_source_note`) över MCP — kräver
+  då att valvets skrivregler och en bekräftelse vägs in.
 - Lägga till en `ingest`-körning efter skrivning (koncept/personer till `02-Wiki/`).
+- Flera videor per körning (batch).
