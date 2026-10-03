@@ -34,6 +34,10 @@ interface WriteSourceNoteInput {
   connections?: string[];
   tags?: string[];
   published?: string;
+  /** Copied from the transcript tool's `truncated` flag. */
+  transcriptTruncated?: boolean;
+  /** Copied from the transcript tool's `text` length. */
+  transcriptChars?: number;
 }
 
 /** Finds an existing note whose `url:` frontmatter points at the same video. */
@@ -115,8 +119,18 @@ export function createVaultTools(options: VaultToolOptions) {
         connections: { type: "array", items: { type: "string" } },
         tags: { type: "array", items: { type: "string" } },
         published: { type: "string", description: "Publiceringsdatum (YYYY-MM-DD), valfritt." },
+        transcriptTruncated: {
+          type: "boolean",
+          description:
+            "Kopiera `truncated` från fetch_youtube_transcript. Måste anges — true gör att " +
+            "noten varnar för att den inte bygger på hela videon.",
+        },
+        transcriptChars: {
+          type: "number",
+          description: "Kopiera antal tecken i transkriptets `text`.",
+        },
       },
-      required: ["title", "author", "url", "summary", "keyIdeas"],
+      required: ["title", "author", "url", "summary", "keyIdeas", "transcriptTruncated"],
       additionalProperties: false,
     },
     lifecycle: { completesRun: true },
@@ -138,6 +152,12 @@ export function createVaultTools(options: VaultToolOptions) {
           tags: input.tags ?? [],
           ingested: options.today,
           ...(input.published ? { published: input.published } : {}),
+          ...(input.transcriptTruncated !== undefined
+            ? { transcriptTruncated: input.transcriptTruncated }
+            : {}),
+          ...(input.transcriptChars !== undefined
+            ? { transcriptChars: input.transcriptChars }
+            : {}),
         });
 
         if (options.dryRun) {

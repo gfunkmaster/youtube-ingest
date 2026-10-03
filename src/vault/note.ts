@@ -15,6 +15,10 @@ export interface SourceNoteInput {
   /** ISO date (YYYY-MM-DD) for created/updated/ingested. */
   ingested: string;
   language?: string;
+  /** True when the transcript was cut at the character cap. */
+  transcriptTruncated?: boolean;
+  /** How many transcript characters were actually available. */
+  transcriptChars?: number;
   summary: string;
   keyIdeas: readonly string[];
   quotes?: readonly string[];
@@ -78,6 +82,22 @@ export function buildSourceNote(input: SourceNoteInput): string {
   ];
 
   const body: string[] = ["", `# ${input.title}`, ""];
+
+  // A truncated transcript must never be presented as the whole video. This is
+  // rendered from the tool's own `truncated` flag — never left to the model to
+  // remember, and placed above the summary so it is seen before the claims.
+  if (input.transcriptTruncated) {
+    const chars =
+      typeof input.transcriptChars === "number"
+        ? `${new Intl.NumberFormat("sv-SE").format(input.transcriptChars)} tecken`
+        : "ett tak";
+    body.push(
+      "> [!warning] Transkriptet är kapat",
+      `> Endast de första ~${chars} hämtades. **Noten bygger inte på hela videon** —`,
+      "> sammanfattning och citat täcker bara början. Verifiera mot videon innan du litar på den.",
+      "",
+    );
+  }
 
   body.push("## Sammanfattning", input.summary.trim(), "");
 

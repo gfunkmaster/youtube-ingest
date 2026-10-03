@@ -29,6 +29,10 @@ Fält för write_source_note:
 - connections: wiki-länkar som "[[Koncept]]" till relevanta begrepp/personer, om några.
 - tags: korta ämnesord på svenska (gemener).
 - published: videons publiceringsdatum om du känner till det, annars utelämna.
+- transcriptTruncated: OBLIGATORISKT. Kopiera fältet "truncated" exakt som det stod
+  i svaret från fetch_youtube_transcript. Är det true får du inte sammanfatta videon
+  som helhet — noten varnar då automatiskt.
+- transcriptChars: antal tecken i transkriptets "text" (samma svar).
 
 Icke förhandlingsbara regler:
 - Ändra aldrig siffror, namn eller påståenden från metadata eller transkript.

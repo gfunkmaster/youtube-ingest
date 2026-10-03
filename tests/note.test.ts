@@ -65,6 +65,30 @@ describe("buildSourceNote", () => {
     expect(note).not.toContain("## Transkript");
   });
 
+  it("warns visibly when the transcript was truncated", () => {
+    const note = buildSourceNote({
+      ...base,
+      transcriptTruncated: true,
+      transcriptChars: 120000,
+    });
+
+    expect(note).toContain("> [!warning] Transkriptet är kapat");
+    expect(note).toMatch(/120\s000 tecken/);
+    // Must be read BEFORE the claims it undermines.
+    expect(note.indexOf("[!warning]")).toBeLessThan(note.indexOf("## Sammanfattning"));
+  });
+
+  it("does not warn when the transcript is complete", () => {
+    const note = buildSourceNote({ ...base, transcriptTruncated: false });
+    expect(note).not.toContain("[!warning]");
+  });
+
+  it("still warns when no character count is given", () => {
+    const note = buildSourceNote({ ...base, transcriptTruncated: true });
+    expect(note).toContain("> [!warning] Transkriptet är kapat");
+    expect(note).toContain("ett tak");
+  });
+
   it("writes an empty published field when the date is unknown", () => {
     expect(buildSourceNote(base)).toContain('published: ""');
   });

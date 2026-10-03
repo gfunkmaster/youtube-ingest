@@ -127,6 +127,22 @@ describe("createVaultTools", () => {
     expect(await checkTool.execute({ url: URL }, CONTEXT)).toMatchObject({ exists: true });
   });
 
+  it("carries the truncation flag through to the written note", async () => {
+    const [, writeTool] = createVaultTools({ vaultDir: dir, today: "2026-10-03" });
+
+    await writeTool.execute(
+      { ...noteInput, transcriptTruncated: true, transcriptChars: 120000 },
+      CONTEXT,
+    );
+
+    const content = await readFile(
+      join(dir, "01-Raw/Videos", "Test Title (video).md"),
+      "utf8",
+    );
+    expect(content).toContain("> [!warning] Transkriptet är kapat");
+    expect(content).toMatch(/120\s000 tecken/);
+  });
+
   it("does not overwrite an existing note unless force is set", async () => {
     const [, writeTool] = createVaultTools({ vaultDir: dir, today: "2026-10-03" });
     await writeTool.execute(noteInput, CONTEXT);
