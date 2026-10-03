@@ -83,10 +83,20 @@ describe("buildSourceNote", () => {
     expect(note).not.toContain("[!warning]");
   });
 
+  it("states the kept count against the full length when both are known", () => {
+    const note = buildSourceNote({
+      ...base,
+      transcriptTruncated: true,
+      transcriptChars: 120000,
+      transcriptTotalChars: 350000,
+    });
+    expect(note).toMatch(/120\s000 av ~350\s000 tecken/);
+  });
+
   it("still warns when no character count is given", () => {
     const note = buildSourceNote({ ...base, transcriptTruncated: true });
     expect(note).toContain("> [!warning] Transkriptet är kapat");
-    expect(note).toContain("ett tak");
+    expect(note).toContain("Transkriptet kapades.");
   });
 
   it("writes an empty published field when the date is unknown", () => {

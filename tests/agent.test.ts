@@ -9,6 +9,7 @@ import {
   type AgentModelLike,
   type AgentTools,
 } from "../src/agent/run.js";
+import { createIngestSession } from "../src/session.js";
 import { createVaultTools } from "../src/tools/vault.js";
 import { createYoutubeTools } from "../src/tools/youtube.js";
 
@@ -40,6 +41,48 @@ const oembedFetch: typeof globalThis.fetch = async () =>
     JSON.stringify({ title: "Test Title", author_name: "Test Channel" }),
     { status: 200, headers: { "content-type": "application/json" } },
   );
+
+/** Fakes oEmbed + the InnerTube/timedtext flow the transcript lib uses. */
+const fullFetch: typeof globalThis.fetch = async (input) => {
+  const url = requestUrl(input);
+
+  if (url.includes("oembed")) {
+    return new Response(
+      JSON.stringify({ title: "Session Test", author_name: "Test Channel" }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }
+
+  if (url.includes("/youtubei/v1/player")) {
+    return new Response(
+      JSON.stringify({
+        captions: {
+          playerCaptionsTracklistRenderer: {
+            captionTracks: [
+              {
+                baseUrl: "https://www.youtube.com/api/timedtext?v=45K3zHckCnQ&lang=en",
+                languageCode: "en",
+              },
+            ],
+          },
+        },
+      }),
+      { status: 200 },
+    );
+  }
+
+  return new Response(
+    '<transcript><text start="0" dur="2">Hello world from the transcript</text></transcript>',
+    { status: 200 },
+  );
+};
+
+type FetchInput = Parameters<typeof globalThis.fetch>[0];
+
+function requestUrl(input: FetchInput): string {
+  if (typeof input === "string") return input;
+  return typeof (input as Request).url === "string" ? (input as Request).url : String(input);
+}
 
 function toolResultOutputs(
   messages: readonly {
@@ -134,6 +177,70 @@ describe("runIngestAgent", () => {
       );
       expect(content).toContain("## Sammanfattning");
       expect(content).toContain('status: raw');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("hands the transcript tool-to-tool, without the model carrying it", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "youtube-ingest-agent-"));
+
+    try {
+      const session = createIngestSession();
+      const tools = [
+        ...createYoutubeTools({ fetch: fullFetch, session }),
+        ...createVaultTools({ vaultDir: dir, today: "2026-10-03", session }),
+      ] as unknown as AgentTools;
+
+      const model = scriptedModel([
+        [
+          {
+            type: "tool-call-delta",
+            toolCallId: "t1",
+            toolName: "fetch_youtube_transcript",
+            input: { url: URL },
+          },
+          { type: "finish", reason: "tool-calls" },
+        ],
+        [
+          {
+            type: "tool-call-delta",
+            toolCallId: "w1",
+            toolName: "write_source_note",
+            input: {
+              title: "Session Test",
+              author: "Kanal",
+              url: URL,
+              summary: "[fakta] Sammanfattning.",
+              keyIdeas: ["[tolkning] En idé."],
+              transcriptTruncated: false,
+            },
+          },
+          { type: "finish", reason: "tool-calls" },
+        ],
+        [
+          { type: "text-delta", text: "Klart." },
+          { type: "finish", reason: "stop" },
+        ],
+      ]);
+
+      const result = await runIngestAgent({
+        model,
+        systemPrompt: "test",
+        tools,
+        prompt: "go",
+        maxIterations: 6,
+      });
+
+      expect(result.status).toBe("completed");
+
+      // The note carries the transcript even though the model NEVER passed it.
+      const content = await readFile(
+        join(dir, "01-Raw/Videos", "Session Test (video).md"),
+        "utf8",
+      );
+      expect(content).toContain("## Transkript");
+      expect(content).toContain("Hello world from the transcript");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

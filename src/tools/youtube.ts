@@ -1,5 +1,6 @@
 import { createTool } from "@cline/sdk";
 
+import type { IngestSession } from "../session.js";
 import { errorMessage } from "../util.js";
 import { fetchVideoMetadata } from "../youtube/metadata.js";
 import { fetchVideoTranscript } from "../youtube/transcript.js";
@@ -11,6 +12,8 @@ export interface YoutubeToolDeps {
   lang?: string;
   /** Character cap for the transcript handed to the model. */
   maxChars?: number;
+  /** When given, the fetched transcript is handed over for the note tool. */
+  session?: IngestSession;
 }
 
 interface UrlInput {
@@ -69,7 +72,7 @@ export function createYoutubeTools(deps: YoutubeToolDeps = {}) {
     },
     execute: async (input: UrlInput) => {
       try {
-        return await fetchVideoTranscript(
+        const result = await fetchVideoTranscript(
           input.url,
           {
             ...(deps.lang ? { lang: deps.lang } : {}),
@@ -77,6 +80,21 @@ export function createYoutubeTools(deps: YoutubeToolDeps = {}) {
           },
           transcriptDeps,
         );
+
+        // Hand the source text straight to the note tool. Going through the model
+        // instead would cost 120k output tokens and let it paraphrase the source.
+        if (deps.session) {
+          deps.session.transcript = {
+            videoId: result.videoId,
+            language: result.language,
+            text: result.text,
+            truncated: result.truncated,
+            chars: result.text.length,
+            totalChars: result.totalChars,
+          };
+        }
+
+        return result;
       } catch (error) {
         return { error: errorMessage(error) };
       }

@@ -12,6 +12,7 @@ import {
 import { buildSystemPrompt, buildUserPrompt } from "./prompts.js";
 import { createVaultTools } from "./tools/vault.js";
 import { createYoutubeTools } from "./tools/youtube.js";
+import { createIngestSession } from "./session.js";
 import { VIDEO_NOTES_SUBDIR } from "./vault/paths.js";
 import { parseVideoId, playlistIdOf } from "./youtube/video-id.js";
 import { errorMessage } from "./util.js";
@@ -24,6 +25,7 @@ Användning:
 Flaggor:
   --dry-run            Skriv ingen fil; visa noten i terminalen i stället
   --force              Skriv över en befintlig not för samma video
+  --no-transcript      Lägg inte in transkriptet i noten (mindre filer)
   --lang <kod>         Föredraget transkriptspråk (t.ex. sv, en)
   --provider <id>      LLM-provider (standard: YOUTUBE_INGEST_PROVIDER eller anthropic)
   --model <id>         Modell (standard: providerns defaultModelId i SDK-registret)
@@ -47,6 +49,7 @@ interface ParsedCli {
   listProviders: boolean;
   dryRun: boolean;
   force: boolean;
+  noTranscript: boolean;
   lang: string | undefined;
   provider: string | undefined;
   model: string | undefined;
@@ -62,6 +65,7 @@ function parseCli(argv: string[]): ParsedCli {
     options: {
       "dry-run": { type: "boolean", default: false },
       force: { type: "boolean", default: false },
+      "no-transcript": { type: "boolean", default: false },
       lang: { type: "string" },
       provider: { type: "string" },
       model: { type: "string" },
@@ -85,6 +89,7 @@ function parseCli(argv: string[]): ParsedCli {
     listProviders: values["list-providers"] ?? false,
     dryRun: values["dry-run"] ?? false,
     force: values.force ?? false,
+    noTranscript: values["no-transcript"] ?? false,
     lang: values.lang,
     provider: values.provider,
     model: values.model,
@@ -109,6 +114,28 @@ function toolOutputs(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+/**
+ * Keeps a dry-run preview readable when the note carries a full transcript.
+ * The elision is stated explicitly so the preview never pretends to be the file.
+ */
+function previewForTerminal(markdown: string): string {
+  const marker = "\n## Transkript\n";
+  const at = markdown.indexOf(marker);
+  if (at === -1) return markdown;
+
+  const head = markdown.slice(0, at);
+  const rest = markdown.slice(at + marker.length);
+  const nextSection = rest.indexOf("\n## ");
+  const body = nextSection === -1 ? rest : rest.slice(0, nextSection);
+  const tail = nextSection === -1 ? "" : rest.slice(nextSection);
+
+  return (
+    `${head}${marker}` +
+    `<!-- förhandsvisning: transkriptet utelämnat här (${body.trim().length} tecken ` +
+    `finns i filen) -->${tail}`
+  );
 }
 
 /** Prints every provider in the SDK registry (`--list-providers`). */
@@ -221,13 +248,16 @@ async function main(): Promise<number> {
   const lang = config.lang;
   const today = new Date().toISOString().slice(0, 10);
 
-  const youtubeTools = createYoutubeTools({ ...(lang ? { lang } : {}) });
+  const session = createIngestSession();
+  const youtubeTools = createYoutubeTools({ ...(lang ? { lang } : {}), session });
   const vaultTools = createVaultTools({
     vaultDir,
     notesSubdir,
     today,
     dryRun: cli.dryRun,
     force: cli.force,
+    session,
+    includeTranscript: !cli.noTranscript,
   });
 
   const tools = [...youtubeTools, ...vaultTools] as unknown as AgentTools;
@@ -259,7 +289,8 @@ async function main(): Promise<number> {
       process.stderr.write(`\nFel: ${lastWrite.error}\n`);
     } else if (lastWrite.dryRun === true && typeof lastWrite.preview === "string") {
       process.stdout.write(
-        `\n--- dry-run: ${String(lastWrite.path)} ---\n${lastWrite.preview}\n`,
+        `\n--- dry-run: ${String(lastWrite.path)} ---\n` +
+          `${previewForTerminal(lastWrite.preview)}\n`,
       );
     } else if (lastWrite.written === true) {
       process.stdout.write(`\nKällnot skriven: ${String(lastWrite.path)}\n`);

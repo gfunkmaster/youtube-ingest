@@ -11,6 +11,8 @@ export interface TranscriptResult {
   text: string;
   /** True when `text` was cut at `maxChars`. */
   truncated: boolean;
+  /** Length of the full transcript before any cap. */
+  totalChars: number;
 }
 
 export interface TranscriptDeps {
@@ -46,6 +48,7 @@ function toResult(
     segmentCount: segments.length,
     text: truncated ? joined.slice(0, maxChars) : joined,
     truncated,
+    totalChars: joined.length,
   };
 }
 

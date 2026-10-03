@@ -2,6 +2,7 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 
 import { createTool } from "@cline/sdk";
 
+import type { IngestSession } from "../session.js";
 import { errorMessage } from "../util.js";
 import { VIDEO_NOTES_SUBDIR, videoNotesDir } from "../vault/paths.js";
 import { buildSourceNote, sourceNoteFileName } from "../vault/note.js";
@@ -18,6 +19,10 @@ export interface VaultToolOptions {
   dryRun?: boolean;
   /** When true, an existing note for the same video is overwritten. */
   force?: boolean;
+  /** Carries the transcript from the transcript tool (never via the model). */
+  session?: IngestSession;
+  /** Attach the source transcript to the note. Defaults to true. */
+  includeTranscript?: boolean;
 }
 
 interface UrlInput {
@@ -140,6 +145,19 @@ export function createVaultTools(options: VaultToolOptions) {
         const fileName = sourceNoteFileName(input.title);
         const filePath = `${dir}/${fileName}`;
 
+        // The transcript arrives from the transcript tool through the session, not
+        // from the model — and only when it belongs to THIS video.
+        const handoff = options.session?.transcript;
+        const matched = handoff && handoff.videoId === videoId ? handoff : undefined;
+        const transcript =
+          options.includeTranscript === false ? undefined : matched?.text;
+
+        // Prefer the tool's own truncation values; the model's copy is only a
+        // fallback. A note must never hide that its source was partial.
+        const transcriptTruncated = matched ? matched.truncated : input.transcriptTruncated;
+        const transcriptChars = matched ? matched.chars : input.transcriptChars;
+        const transcriptTotalChars = matched?.totalChars;
+
         const markdown = buildSourceNote({
           title: input.title,
           author: input.author,
@@ -152,12 +170,10 @@ export function createVaultTools(options: VaultToolOptions) {
           tags: input.tags ?? [],
           ingested: options.today,
           ...(input.published ? { published: input.published } : {}),
-          ...(input.transcriptTruncated !== undefined
-            ? { transcriptTruncated: input.transcriptTruncated }
-            : {}),
-          ...(input.transcriptChars !== undefined
-            ? { transcriptChars: input.transcriptChars }
-            : {}),
+          ...(transcript ? { transcript } : {}),
+          ...(transcriptTruncated !== undefined ? { transcriptTruncated } : {}),
+          ...(transcriptChars !== undefined ? { transcriptChars } : {}),
+          ...(transcriptTotalChars !== undefined ? { transcriptTotalChars } : {}),
         });
 
         if (options.dryRun) {

@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { createIngestSession } from "../src/session.js";
 import { createVaultTools } from "../src/tools/vault.js";
 import { createYoutubeTools } from "../src/tools/youtube.js";
 
@@ -125,6 +126,80 @@ describe("createVaultTools", () => {
     expect(content).toContain(URL);
 
     expect(await checkTool.execute({ url: URL }, CONTEXT)).toMatchObject({ exists: true });
+  });
+
+  it("attaches the transcript from the session, never from the model", async () => {
+    const session = createIngestSession();
+    session.transcript = {
+      videoId: "45K3zHckCnQ",
+      language: "en",
+      text: "Hello from the source.",
+      truncated: true,
+      chars: 21,
+      totalChars: 350000,
+    };
+    const [, writeTool] = createVaultTools({ vaultDir: dir, today: "2026-10-03", session });
+
+    await writeTool.execute(noteInput, CONTEXT);
+
+    const content = await readFile(
+      join(dir, "01-Raw/Videos", "Test Title (video).md"),
+      "utf8",
+    );
+    expect(content).toContain("## Transkript");
+    expect(content).toContain("Hello from the source.");
+    // The warning uses the SESSION's numbers, not anything the model said.
+    expect(content).toContain("> [!warning] Transkriptet är kapat");
+    expect(content).toMatch(/21 av ~350\s000 tecken/);
+  });
+
+  it("refuses a transcript that belongs to a different video", async () => {
+    const session = createIngestSession();
+    session.transcript = {
+      videoId: "ZZZZZZZZZZZ",
+      language: "en",
+      text: "WRONG VIDEO SOURCE",
+      truncated: false,
+      chars: 18,
+      totalChars: 18,
+    };
+    const [, writeTool] = createVaultTools({ vaultDir: dir, today: "2026-10-03", session });
+
+    await writeTool.execute(noteInput, CONTEXT);
+
+    const content = await readFile(
+      join(dir, "01-Raw/Videos", "Test Title (video).md"),
+      "utf8",
+    );
+    expect(content).not.toContain("WRONG VIDEO SOURCE");
+    expect(content).not.toContain("## Transkript");
+  });
+
+  it("omits the transcript when includeTranscript is false", async () => {
+    const session = createIngestSession();
+    session.transcript = {
+      videoId: "45K3zHckCnQ",
+      language: "en",
+      text: "Some source text.",
+      truncated: false,
+      chars: 16,
+      totalChars: 16,
+    };
+    const [, writeTool] = createVaultTools({
+      vaultDir: dir,
+      today: "2026-10-03",
+      session,
+      includeTranscript: false,
+    });
+
+    await writeTool.execute(noteInput, CONTEXT);
+
+    const content = await readFile(
+      join(dir, "01-Raw/Videos", "Test Title (video).md"),
+      "utf8",
+    );
+    expect(content).not.toContain("## Transkript");
+    expect(content).not.toContain("Some source text.");
   });
 
   it("carries the truncation flag through to the written note", async () => {
