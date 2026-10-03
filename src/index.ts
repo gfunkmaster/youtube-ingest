@@ -2,7 +2,13 @@
 import { parseArgs } from "node:util";
 
 import { runIngestAgent, type AgentTools } from "./agent/run.js";
-import { apiKeyHint, loadConfig } from "./config.js";
+import {
+  listProviders,
+  loadConfig,
+  modelExistsForProvider,
+  UnknownProviderError,
+  type AppConfig,
+} from "./config.js";
 import { buildSystemPrompt, buildUserPrompt } from "./prompts.js";
 import { createVaultTools } from "./tools/vault.js";
 import { createYoutubeTools } from "./tools/youtube.js";
@@ -19,19 +25,25 @@ Flaggor:
   --force              Skriv över en befintlig not för samma video
   --lang <kod>         Föredraget transkriptspråk (t.ex. sv, en)
   --provider <id>      LLM-provider (standard: YOUTUBE_INGEST_PROVIDER eller anthropic)
-  --model <id>         Modell (standard: YOUTUBE_INGEST_MODEL eller claude-sonnet-4-6)
+  --model <id>         Modell (standard: providerns defaultModelId i SDK-registret)
   --vault <sökväg>     Valvets rot (standard: YOUTUBE_INGEST_VAULT)
   --out <undermapp>    Mapp för källnoter (standard: ${VIDEO_NOTES_SUBDIR})
   --max-iterations <n> Tak för agentens loop (standard: 12)
+  --list-providers     Lista alla LLM-providers SDK:n känner till (t.ex. deepseek)
   -h, --help           Visa hjälp
 
+Providern är valfri: Cline SDK innehåller ett par hundra. Nyckelns miljövariabel
+läses ur SDK-registret (deepseek -> DEEPSEEK_API_KEY, groq -> GROQ_API_KEY, ...).
+
 Exempel:
-  youtube-ingest "https://www.youtube.com/watch?v=45K3zHckCnQ"
-  youtube-ingest "https://youtu.be/45K3zHckCnQ" --dry-run`;
+  youtube-ingest "https://www.youtube.com/watch?v=45K3zHckCnQ" --dry-run
+  youtube-ingest "https://youtu.be/45K3zHckCnQ" --provider deepseek
+  youtube-ingest --list-providers`;
 
 interface ParsedCli {
   url: string | undefined;
   help: boolean;
+  listProviders: boolean;
   dryRun: boolean;
   force: boolean;
   lang: string | undefined;
@@ -55,6 +67,7 @@ function parseCli(argv: string[]): ParsedCli {
       vault: { type: "string" },
       out: { type: "string" },
       "max-iterations": { type: "string" },
+      "list-providers": { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
   });
@@ -68,6 +81,7 @@ function parseCli(argv: string[]): ParsedCli {
   return {
     url: positionals[0],
     help: values.help ?? false,
+    listProviders: values["list-providers"] ?? false,
     dryRun: values["dry-run"] ?? false,
     force: values.force ?? false,
     lang: values.lang,
@@ -96,6 +110,27 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+/** Prints every provider in the SDK registry (`--list-providers`). */
+async function printProviders(): Promise<number> {
+  const providers = await listProviders();
+  const withKey = providers.filter((provider) => provider.hasKey).length;
+
+  const rows = providers.map((provider) => {
+    const marker = provider.isDefault ? "*" : " ";
+    const key = provider.hasKey ? "✓" : " ";
+    return `${marker} ${key}  ${provider.id.padEnd(26)} ${provider.defaultModelId.padEnd(30)} ${provider.envNames.join(", ")}`;
+  });
+
+  process.stdout.write(
+    `Providers i Cline SDK: ${providers.length} st (* = standard, ✓ = nyckel finns i miljön)\n\n` +
+      `      ${"id".padEnd(26)} ${"defaultModelId".padEnd(30)} nyckelvariabel\n` +
+      `${rows.join("\n")}\n\n` +
+      `Välj med YOUTUBE_INGEST_PROVIDER=<id> i .env, eller --provider <id>.\n` +
+      `Nycklar hittade i miljön just nu: ${withKey}.\n`,
+  );
+  return 0;
+}
+
 async function main(): Promise<number> {
   let cli: ParsedCli;
   try {
@@ -105,27 +140,56 @@ async function main(): Promise<number> {
     return 2;
   }
 
+  if (cli.listProviders) return printProviders();
+
   if (cli.help || !cli.url) {
     process.stdout.write(`${USAGE}\n`);
     return cli.help ? 0 : 2;
   }
 
-  const config = loadConfig();
-  const providerId = cli.provider ?? config.providerId;
-  const modelId = cli.model ?? config.modelId;
+  let config: AppConfig;
+  try {
+    config = await loadConfig(process.env, {
+      ...(cli.provider ? { providerId: cli.provider } : {}),
+      ...(cli.model ? { modelId: cli.model } : {}),
+      ...(cli.vault ? { vaultDir: cli.vault } : {}),
+      ...(cli.lang ? { lang: cli.lang } : {}),
+    });
+  } catch (error) {
+    if (error instanceof UnknownProviderError) {
+      process.stderr.write(`${errorMessage(error)}\n`);
+      return 2;
+    }
+    throw error;
+  }
 
-  if (!config.apiKey && !cli.provider) {
+  const { providerId, modelId } = config;
+
+  if (config.requiresApiKey && !config.apiKey) {
     process.stderr.write(
       `Ingen API-nyckel hittades för providern "${providerId}".\n` +
-        `Sätt ${apiKeyHint(providerId)} (se .env.example) eller ange --provider ` +
-        "för en nyckelfri provider.\n",
+        `Sätt ${config.apiKeyEnvNames.join(" eller ")} i .env (se .env.example).\n` +
+        'Providern kommer från SDK-registret — "npm run dev -- --list-providers" visar alla.\n',
     );
     return 2;
   }
 
-  const vaultDir = cli.vault ?? config.vaultDir;
+  // Guard against a stale YOUTUBE_INGEST_MODEL from another provider — e.g.
+  // switching to deepseek while an Anthropic model id is still set.
+  if (config.modelIdIsExplicit) {
+    const known = await modelExistsForProvider(providerId, modelId);
+    if (known === false) {
+      process.stderr.write(
+        `Varning: modellen "${modelId}" finns inte bland modellerna för providern ` +
+          `"${providerId}". Providerns standard är "${config.providerDefaultModelId}" — ` +
+          "ta bort YOUTUBE_INGEST_MODEL (eller --model) för att använda den.\n\n",
+      );
+    }
+  }
+
+  const { vaultDir } = config;
   const notesSubdir = cli.out ?? VIDEO_NOTES_SUBDIR;
-  const lang = cli.lang ?? config.lang;
+  const lang = config.lang;
   const today = new Date().toISOString().slice(0, 10);
 
   const youtubeTools = createYoutubeTools({ ...(lang ? { lang } : {}) });

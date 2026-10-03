@@ -57,22 +57,57 @@ till `02-Wiki/` och logga i `99-System/log.md`.
 --dry-run            Skriv ingen fil; visa noten i terminalen
 --force              Skriv över en befintlig not
 --lang sv            Föredraget transkriptspråk
---provider <id>      LLM-provider (standard: anthropic)
---model <id>         Modell   (standard: claude-sonnet-4-6)
+--provider <id>      LLM-provider (valfri; se --list-providers)
+--model <id>         Modell   (standard: providerns defaultModelId)
 --vault <sökväg>     Valvets rot
 --out <undermapp>    Mapp för källnoter (standard: 01-Raw/Videos)
 --max-iterations <n> Tak för agentens loop
+--list-providers     Lista SDK:ns alla providers + nyckelvariabel + standardmodell
 ```
+
+## Provider — vilken som helst, inte bara Anthropic
+
+Appen är inte bunden till en leverantör. **Providerlistan, nyckelvariabeln och
+standardmodellen läses ur Cline SDK:s register** — inget är hårdkodat. Just nu
+innehåller registret **228 providers**, t.ex. `anthropic`, `deepseek`, `groq`,
+`openai-native`, `gemini`, `xai`, `mistral`, `openrouter`, `together`,
+`cerebras`, `fireworks`, `ollama`, `lmstudio`.
+
+```bash
+npm run dev -- --list-providers        # id + defaultModelId + nyckelvariabel
+```
+
+Byta till DeepSeek:
+
+```bash
+# i .env
+YOUTUBE_INGEST_PROVIDER=deepseek
+DEEPSEEK_API_KEY=sk-...                # namn kommer från registret
+# YOUTUBE_INGEST_MODEL=                 # lämna tom → deepseek-v4-flash
+```
+
+Samma sak utan att röra `.env`:
+
+```bash
+npm run dev -- "https://youtu.be/..." --provider deepseek
+```
+
+> **Modell är providerspecifik.** Sätter du `YOUTUBE_INGEST_MODEL` till en modell
+> som hör till en *annan* provider varnar appen vid start och tipsar om
+> providerns standard. Lämna variabeln tom för att alltid få rätt modell.
+
+Lokala providers (t.ex. `ollama` på `http://localhost:11434`) känns igen på sin
+baseUrl och kräver ingen nyckel.
 
 ## Konfiguration (miljövariabler)
 
 | Variabel | Standard | Beskrivning |
 |---|---|---|
-| `YOUTUBE_INGEST_PROVIDER` | `anthropic` | Provider-id i Cline SDK |
-| `YOUTUBE_INGEST_MODEL` | `claude-sonnet-4-6` | Modell-id |
-| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GOOGLE_API_KEY` | – | Nyckel för vald provider |
+| `YOUTUBE_INGEST_PROVIDER` | `anthropic` | Valfritt provider-id ur SDK-registret |
+| `YOUTUBE_INGEST_MODEL` | (tom) | Tom → providerns `defaultModelId` |
+| `<PROVIDER>_API_KEY` | – | Nyckelvariabeln kommer från registret: `DEEPSEEK_API_KEY`, `GROQ_API_KEY`, `ANTHROPIC_API_KEY`, ... |
 | `YOUTUBE_INGEST_VAULT` | `/Users/elminnurkic/Documents/Second Brain` | Valvets rot |
-| `YOUTUBE_INGEST_LANG` | – | Föredraget transkriptspråk |
+| `YOUTUBE_INGEST_LANG` | – | Föredraget transkriptspråk (tom = original/engelska) |
 
 ## Utveckling
 
@@ -87,7 +122,7 @@ npm run build       # tsc → dist/
 ```
 src/
   index.ts               CLI (argument, miljö, utskrift)
-  config.ts              Läser env → AppConfig
+  config.ts              Läser env + SDK-providerregistret → AppConfig
   prompts.ts             System- och användarprompt (svenska)
   agent/run.ts           Bygger Cline SDK-Agent + streamar text
   tools/youtube.ts       fetch_youtube_metadata, fetch_youtube_transcript
@@ -160,7 +195,11 @@ Starta om Cline-sessionen. Verktygen dyker upp som `fetch_youtube_metadata` och
 | Kontroll | Kommando | Resultat |
 |---|---|---|
 | Typer | `npm run typecheck` | 0 fel |
-| Enhets-/integrationstester | `npm test` | **34/34** (video-ID, notbygge, verktyg, agent-loop) |
+| Enhets-/integrationstester | `npm test` | **55/55** (video-ID, notbygge, verktyg, agent-loop, MCP, config) |
+| Provider-registret | `npm run dev -- --list-providers` | 228 providers, med nyckelvariabel + standardmodell |
+| Annan provider | `--provider deepseek` + `DEEPSEEK_API_KEY` | `modell: deepseek-v4-flash`, nådde DeepSeeks API (fejknyckel gav deras auth-fel) |
+| Modellskydd | `--provider deepseek --model claude-sonnet-4-6` | varnar och tipsar om rätt standardmodell |
+| Okänd provider | `--provider nope-not-real` | tydligt fel + hänvisning till `--list-providers` |
 | Bygge | `npm run build` | rent (`dist/`) |
 | Live: metadata + transkript | `npm run smoke` | titel/kanal/thumbnail korrekt; transkript på **engelska**, 885 segment, 33 479 tecken |
 | MCP över riktig stdio | `npm run mcp:smoke` | båda verktygen listade; riktig metadata + engelskt transkript över protokollet |
