@@ -182,6 +182,69 @@ describe("runIngestAgent", () => {
     }
   });
 
+  it("nudges once when the model finishes without calling the required tool", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "youtube-ingest-agent-"));
+
+    try {
+      const session = createIngestSession();
+      session.transcript = {
+        videoId: "45K3zHckCnQ",
+        language: "en",
+        text: "Source text.",
+        truncated: false,
+        chars: 12,
+        totalChars: 12,
+      };
+      const tools = [
+        ...createVaultTools({ vaultDir: dir, today: "2026-10-03", session }),
+      ] as unknown as AgentTools;
+
+      const model = scriptedModel([
+        // Turn 1: the model just answers in prose and stops — the failure we saw.
+        [
+          { type: "text-delta", text: "Här är en sammanfattning i text." },
+          { type: "finish", reason: "stop" },
+        ],
+        // Turn 2 (after the nudge): it actually calls the tool.
+        [
+          {
+            type: "tool-call-delta",
+            toolCallId: "w1",
+            toolName: "write_source_note",
+            input: {
+              title: "Nudged",
+              author: "Kanal",
+              url: URL,
+              summary: "[fakta] Sammanfattning.",
+              keyIdeas: ["[tolkning] En idé."],
+              transcriptTruncated: false,
+            },
+          },
+          { type: "finish", reason: "tool-calls" },
+        ],
+        [
+          { type: "text-delta", text: "Klart." },
+          { type: "finish", reason: "stop" },
+        ],
+      ]);
+
+      const result = await runIngestAgent({
+        model,
+        systemPrompt: "test",
+        tools,
+        prompt: "go",
+        maxIterations: 8,
+        requiredTool: "write_source_note",
+      });
+
+      expect(toolResultOutputs(result.messages, "write_source_note")[0]).toMatchObject({
+        written: true,
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("hands the transcript tool-to-tool, without the model carrying it", async () => {
     const dir = await mkdtemp(join(tmpdir(), "youtube-ingest-agent-"));
 

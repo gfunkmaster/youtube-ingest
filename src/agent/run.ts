@@ -1,5 +1,7 @@
 import { Agent } from "@cline/sdk";
 
+import { toolOutputs } from "./diagnose.js";
+
 /** Types derived from the SDK's Agent constructor — no invented shapes. */
 type AgentConfig = ConstructorParameters<typeof Agent>[0];
 export type AgentTools = NonNullable<AgentConfig["tools"]>;
@@ -21,6 +23,14 @@ export interface RunIngestBaseOptions {
   maxIterations?: number;
   /** Called for every streamed assistant text delta. */
   onText?: (delta: string) => void;
+  /**
+   * If the run ends without this tool ever being called, nudge the model once.
+   *
+   * Weaker models sometimes answer in prose and finish without calling the tool
+   * that does the work — the run says "completed" but nothing happened. Retrying
+   * the turn is cheaper and more model-agnostic than tuning the prompt.
+   */
+  requiredTool?: string;
 }
 
 /**
@@ -37,7 +47,9 @@ export type RunIngestAgentOptions = RunIngestBaseOptions &
  * Builds the SDK Agent for a single ingest run and executes it.
  * Text is streamed via `subscribe()`; the final answer is `result.outputText`.
  */
-export function runIngestAgent(options: RunIngestAgentOptions): ReturnType<Agent["run"]> {
+export async function runIngestAgent(
+  options: RunIngestAgentOptions,
+): Promise<Awaited<ReturnType<Agent["run"]>>> {
   const modelConfig = options.model
     ? { model: options.model }
     : {
@@ -62,5 +74,15 @@ export function runIngestAgent(options: RunIngestAgentOptions): ReturnType<Agent
     });
   }
 
-  return agent.run(options.prompt);
+  const result = await agent.run(options.prompt);
+
+  const required = options.requiredTool;
+  if (required && toolOutputs(result.messages, required).length === 0) {
+    return agent.continue(
+      `Du avslutade utan att anropa ${required}. Anropa det nu — det är själva ` +
+        "uppgiften. Avsluta inte med en sammanfattning i text i stället.",
+    );
+  }
+
+  return result;
 }

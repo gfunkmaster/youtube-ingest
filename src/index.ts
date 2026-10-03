@@ -2,6 +2,12 @@
 import { basename } from "node:path";
 import { parseArgs } from "node:util";
 
+import {
+  describeNoNote,
+  isRecord,
+  toolCallNames,
+  toolOutputs,
+} from "./agent/diagnose.js";
 import { runIngestAgent, type AgentTools } from "./agent/run.js";
 import {
   listProviders,
@@ -31,6 +37,7 @@ Flaggor:
   --no-transcript      Lägg inte in transkriptet i noten (mindre filer)
   --playlist           Kör hela spellistan, inte bara videon i URL:en
   --max-videos <n>     Tak för antal videor i en spellista (standard: 10)
+  --verbose            Visa vilka verktyg modellen faktiskt anropade
   --lang <kod>         Föredraget transkriptspråk (t.ex. sv, en)
   --provider <id>      LLM-provider (standard: YOUTUBE_INGEST_PROVIDER eller anthropic)
   --model <id>         Modell (standard: providerns defaultModelId i SDK-registret)
@@ -57,6 +64,7 @@ interface ParsedCli {
   noTranscript: boolean;
   playlist: boolean;
   maxVideos: number | undefined;
+  verbose: boolean;
   lang: string | undefined;
   provider: string | undefined;
   model: string | undefined;
@@ -75,6 +83,7 @@ function parseCli(argv: string[]): ParsedCli {
       "no-transcript": { type: "boolean", default: false },
       playlist: { type: "boolean", default: false },
       "max-videos": { type: "string" },
+      verbose: { type: "boolean", default: false },
       lang: { type: "string" },
       provider: { type: "string" },
       model: { type: "string" },
@@ -107,6 +116,7 @@ function parseCli(argv: string[]): ParsedCli {
     noTranscript: values["no-transcript"] ?? false,
     playlist: values.playlist ?? false,
     maxVideos,
+    verbose: values.verbose ?? false,
     lang: values.lang,
     provider: values.provider,
     model: values.model,
@@ -114,23 +124,6 @@ function parseCli(argv: string[]): ParsedCli {
     out: values.out,
     maxIterations,
   };
-}
-
-/** Pulls the `output` of every tool-result for a given tool name. */
-function toolOutputs(
-  messages: readonly {
-    content: readonly { type: string; toolName?: string; output?: unknown }[];
-  }[],
-  toolName: string,
-): unknown[] {
-  return messages
-    .flatMap((message) => message.content)
-    .filter((part) => part.type === "tool-result" && part.toolName === toolName)
-    .map((part) => part.output);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
 
 /**
@@ -253,6 +246,7 @@ async function runPlaylist(context: RunPlaylistContext): Promise<number> {
         tools,
         prompt: buildUserPrompt(videoUrl),
         ...(cli.maxIterations ? { maxIterations: cli.maxIterations } : {}),
+        requiredTool: "write_source_note",
       });
 
       const last = toolOutputs(result.messages, "write_source_note").at(-1);
@@ -264,11 +258,17 @@ async function runPlaylist(context: RunPlaylistContext): Promise<number> {
         process.stdout.write(`not: ${noteName}\n`);
         outcomes.push({ videoId: item.videoId, title: noteName, noteName });
       } else {
-        const reason =
-          (isRecord(last) && typeof last.reason === "string" ? last.reason : undefined) ??
-          (result.error ? errorMessage(result.error) : `status ${result.status}`);
-        process.stdout.write(`hoppad: ${reason}\n`);
+        // "run completed" is not a reason. Name the actual cause instead.
+        const reason = describeNoNote(result.messages, result.status);
+        process.stdout.write(`ingen not: ${reason}\n`);
         outcomes.push({ videoId: item.videoId, title: item.videoId, skippedReason: reason });
+      }
+
+      if (cli.verbose) {
+        const calls = toolCallNames(result.messages);
+        process.stdout.write(
+          `      verktyg: ${calls.length > 0 ? calls.join(" → ") : "(inga)"}\n`,
+        );
       }
     } catch (error) {
       const reason = errorMessage(error);
@@ -427,6 +427,7 @@ async function main(): Promise<number> {
     tools,
     prompt: buildUserPrompt(cli.url),
     ...(cli.maxIterations ? { maxIterations: cli.maxIterations } : {}),
+    requiredTool: "write_source_note",
     onText: (delta) => process.stdout.write(delta),
   });
 
@@ -447,6 +448,18 @@ async function main(): Promise<number> {
     } else if (typeof lastWrite.reason === "string") {
       process.stdout.write(`\nIngen not skriven: ${lastWrite.reason}\n`);
     }
+  } else {
+    // The model never called the note tool at all — say why, not "completed".
+    process.stderr.write(
+      `\nIngen not skriven: ${describeNoNote(result.messages, result.status)}\n`,
+    );
+  }
+
+  if (cli.verbose) {
+    const calls = toolCallNames(result.messages);
+    process.stdout.write(
+      `Verktyg: ${calls.length > 0 ? calls.join(" → ") : "(inga)"}\n`,
+    );
   }
 
   if (result.status === "failed") {

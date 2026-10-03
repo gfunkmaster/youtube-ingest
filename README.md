@@ -65,6 +65,7 @@ till `02-Wiki/` och logga i `99-System/log.md`.
 --no-transcript      Lägg inte in transkriptet i noten (mindre filer)
 --playlist           Kör hela spellistan, inte bara videon i URL:en
 --max-videos <n>     Tak för antal videor i en spellista (standard: 10)
+--verbose            Visa vilka verktyg modellen faktiskt anropade
 --list-providers     Lista SDK:ns alla providers + nyckelvariabel + standardmodell
 ```
 
