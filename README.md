@@ -62,8 +62,43 @@ till `02-Wiki/` och logga i `99-System/log.md`.
 --vault <sökväg>     Valvets rot
 --out <undermapp>    Mapp för källnoter (standard: 01-Raw/Videos)
 --max-iterations <n> Tak för agentens loop
+--no-transcript      Lägg inte in transkriptet i noten (mindre filer)
+--playlist           Kör hela spellistan, inte bara videon i URL:en
+--max-videos <n>     Tak för antal videor i en spellista (standard: 10)
 --list-providers     Lista SDK:ns alla providers + nyckelvariabel + standardmodell
 ```
+
+## Spellistor
+
+En spelliste-URL körs automatiskt som spellista. En `watch?v=…&list=…`-URL är
+tvetydig och stannar som **enskild video** — men säger det högt — tills du sätter
+`--playlist`.
+
+```bash
+npm run dev -- "https://www.youtube.com/playlist?list=PL..." --dry-run
+npm run dev -- "https://www.youtube.com/playlist?list=PL..." --max-videos 5
+```
+
+Flödet: `yt-dlp` räknar upp videorna → **samma per-video-flöde som förut** körs en
+gång per video → en **hub-not** skrivs till `02-Wiki/Sources/`, samma mönster som
+`Claude Academy` och `Cold State Capital`.
+
+### Tre skydd inbyggda
+
+1. **`--max-videos` (standard 10).** En felklistrad URL får inte kosta obegränsat
+   med pengar. Varje video är en egen LLM-körning.
+2. **En video kan inte fälla hela körningen.** Saknar en video textning hoppas den
+   över, loggas, och sammanställningen i slutet säger hur många som blev klara.
+3. **En video utan transkription blir ingen not.** Noten skulle bara kunna hittas
+   på — så den skrivs inte alls (principen *hellre ingen träff än fel svar*).
+
+### Varför `yt-dlp` och inte skrapning eller Data API
+
+[verifierat] Ren HTML-skrapning fungerar inte: YouTube skickar en
+samtyckesredirect (`consent.youtube.com`) och videoid:na finns inte i HTML:en
+längre. YouTube Data API v3 hade fungerat men krävt ännu en nyckel. `yt-dlp`
+kräver ingen nyckel och är samma *kategori* av verktyg som projektet redan
+använder för transkript (`brew install yt-dlp`).
 
 ## Provider — vilken som helst, inte bara Anthropic
 
@@ -195,7 +230,10 @@ Starta om Cline-sessionen. Verktygen dyker upp som `fetch_youtube_metadata` och
 | Kontroll | Kommando | Resultat |
 |---|---|---|
 | Typer | `npm run typecheck` | 0 fel |
-| Enhets-/integrationstester | `npm test` | **55/55** (video-ID, notbygge, verktyg, agent-loop, MCP, config) |
+| Enhets-/integrationstester | `npm test` | **91/91** (video-ID, notbygge, hub, verktyg, agent-loop, MCP, config, spellista) |
+| Spellisteuppräkning | `fetchPlaylistItems` mot riktig lista | `Claude Code`, 4/4 med `--max-videos 4`, ~1 s, ingen nyckel |
+| Transkriptet till noten | live mot riktig video | 33 479 tecken i noten, modellen bar det aldrig |
+| Kapad transkription | `--` på 4 h-kurs | varning överst i noten, `transcriptTruncated` obligatoriskt |
 | Provider-registret | `npm run dev -- --list-providers` | 228 providers, med nyckelvariabel + standardmodell |
 | Annan provider | `--provider deepseek` + `DEEPSEEK_API_KEY` | `modell: deepseek-v4-flash`, nådde DeepSeeks API (fejknyckel gav deras auth-fel) |
 | Modellskydd | `--provider deepseek --model claude-sonnet-4-6` | varnar och tipsar om rätt standardmodell |

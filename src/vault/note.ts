@@ -38,7 +38,7 @@ const MAX_BASENAME = 120;
  * `I Spent 31,141 & 1,000 Hours (video).md` — matching the existing
  * `<name> (video).md` convention in `01-Raw/Videos/`.
  */
-export function sourceNoteFileName(title: string): string {
+function sanitizeBaseName(title: string, fallback: string): string {
   const cleaned = title
     .replace(FORBIDDEN_FILENAME_CHARS, "-")
     .replace(/\s+/g, " ")
@@ -46,8 +46,84 @@ export function sourceNoteFileName(title: string): string {
     .trim()
     .replace(/[.\s]+$/, "");
 
-  const base = (cleaned.length > 0 ? cleaned : "video").slice(0, MAX_BASENAME).trim();
-  return `${base} (video).md`;
+  return (cleaned.length > 0 ? cleaned : fallback).slice(0, MAX_BASENAME).trim();
+}
+
+export function sourceNoteFileName(title: string): string {
+  return `${sanitizeBaseName(title, "video")} (video).md`;
+}
+
+/** Hub note filename — no "(video)" suffix, since it is not one video. */
+export function sourceHubFileName(title: string): string {
+  return `${sanitizeBaseName(title, "spellista")}.md`;
+}
+
+export interface SourceHubEntry {
+  title: string;
+  videoId: string;
+  /** Link target of the per-video note, when one was written. */
+  noteName?: string;
+  /** Why this video produced no note. */
+  skippedReason?: string;
+}
+
+export interface SourceHubInput {
+  title: string;
+  url: string;
+  ingested: string;
+  entries: readonly SourceHubEntry[];
+  tags?: readonly string[];
+}
+
+/**
+ * Renders the hub note for a playlist, mirroring the vault's existing source-hub
+ * pattern (`02-Wiki/Sources/Claude Academy.md` and friends): one page that links
+ * the individual sources it aggregates.
+ */
+export function buildSourceHubNote(input: SourceHubInput): string {
+  const written = input.entries.filter((entry) => entry.noteName).length;
+  const skipped = input.entries.length - written;
+
+  const lines = input.entries
+    .map((entry, index) => {
+      const label = entry.noteName ? `[[${entry.noteName}]]` : `*(ingen not: ${entry.skippedReason ?? "okänt skäl"})*`;
+      return `${index + 1}. ${label} — ${entry.title} · \`${entry.videoId}\``;
+    })
+    .join("\n");
+
+  const frontmatter = [
+    "---",
+    "type: source",
+    `title: ${yamlString(input.title)}`,
+    'source_type: "playlist"',
+    `author: ${yamlString("")}`,
+    `url: ${yamlString(input.url)}`,
+    `published: ${yamlString("")}`,
+    `ingested: ${yamlString(input.ingested)}`,
+    `created: ${yamlString(input.ingested)}`,
+    `updated: ${yamlString(input.ingested)}`,
+    "status: processing",
+    `tags: ${yamlStringArray(input.tags ?? [])}`,
+    "---",
+  ];
+
+  const body = [
+    "",
+    `# ${input.title}`,
+    "",
+    `> Spellista med ${input.entries.length} videor — ${written} källnoter skrivna` +
+      (skipped > 0 ? `, ${skipped} hoppade över.` : "."),
+    "> Varje video har en egen källnot i `01-Raw/Videos/`.",
+    "",
+    "## Videor",
+    lines,
+    "",
+    "## Källa",
+    `- ${input.url}`,
+    "",
+  ];
+
+  return [...frontmatter, ...body].join("\n");
 }
 
 function bulletList(items: readonly string[]): string {

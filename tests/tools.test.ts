@@ -153,7 +153,7 @@ describe("createVaultTools", () => {
     expect(content).toMatch(/21 av ~350\s000 tecken/);
   });
 
-  it("refuses a transcript that belongs to a different video", async () => {
+  it("refuses to write when the session holds another video's transcript", async () => {
     const session = createIngestSession();
     session.transcript = {
       videoId: "ZZZZZZZZZZZ",
@@ -165,14 +165,29 @@ describe("createVaultTools", () => {
     };
     const [, writeTool] = createVaultTools({ vaultDir: dir, today: "2026-10-03", session });
 
-    await writeTool.execute(noteInput, CONTEXT);
+    const result = await writeTool.execute(noteInput, CONTEXT);
 
-    const content = await readFile(
-      join(dir, "01-Raw/Videos", "Test Title (video).md"),
-      "utf8",
-    );
-    expect(content).not.toContain("WRONG VIDEO SOURCE");
-    expect(content).not.toContain("## Transkript");
+    expect(result).toMatchObject({ written: false });
+    expect((result as { reason: string }).reason).toContain("Ingen transkription");
+    await expect(
+      readFile(join(dir, "01-Raw/Videos", "Test Title (video).md"), "utf8"),
+    ).rejects.toThrow();
+  });
+
+  it("refuses to write a source note when no transcript was fetched", async () => {
+    const session = createIngestSession();
+    const [, writeTool] = createVaultTools({ vaultDir: dir, today: "2026-10-03", session });
+
+    const result = await writeTool.execute(noteInput, CONTEXT);
+
+    expect(result).toMatchObject({ written: false });
+    expect((result as { reason: string }).reason).toMatch(/påhittad/);
+  });
+
+  it("still writes without a session (no transcript guard applies)", async () => {
+    const [, writeTool] = createVaultTools({ vaultDir: dir, today: "2026-10-03" });
+    const result = await writeTool.execute(noteInput, CONTEXT);
+    expect(result).toMatchObject({ written: true });
   });
 
   it("omits the transcript when includeTranscript is false", async () => {

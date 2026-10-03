@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { basename } from "node:path";
 import { parseArgs } from "node:util";
 
 import { runIngestAgent, type AgentTools } from "./agent/run.js";
@@ -13,7 +14,9 @@ import { buildSystemPrompt, buildUserPrompt } from "./prompts.js";
 import { createVaultTools } from "./tools/vault.js";
 import { createYoutubeTools } from "./tools/youtube.js";
 import { createIngestSession } from "./session.js";
+import { writeSourceHub } from "./vault/hub.js";
 import { VIDEO_NOTES_SUBDIR } from "./vault/paths.js";
+import { fetchPlaylistItems, type PlaylistItem } from "./youtube/playlist.js";
 import { parseVideoId, playlistIdOf } from "./youtube/video-id.js";
 import { errorMessage } from "./util.js";
 
@@ -26,6 +29,8 @@ Flaggor:
   --dry-run            Skriv ingen fil; visa noten i terminalen i stället
   --force              Skriv över en befintlig not för samma video
   --no-transcript      Lägg inte in transkriptet i noten (mindre filer)
+  --playlist           Kör hela spellistan, inte bara videon i URL:en
+  --max-videos <n>     Tak för antal videor i en spellista (standard: 10)
   --lang <kod>         Föredraget transkriptspråk (t.ex. sv, en)
   --provider <id>      LLM-provider (standard: YOUTUBE_INGEST_PROVIDER eller anthropic)
   --model <id>         Modell (standard: providerns defaultModelId i SDK-registret)
@@ -50,6 +55,8 @@ interface ParsedCli {
   dryRun: boolean;
   force: boolean;
   noTranscript: boolean;
+  playlist: boolean;
+  maxVideos: number | undefined;
   lang: string | undefined;
   provider: string | undefined;
   model: string | undefined;
@@ -66,6 +73,8 @@ function parseCli(argv: string[]): ParsedCli {
       "dry-run": { type: "boolean", default: false },
       force: { type: "boolean", default: false },
       "no-transcript": { type: "boolean", default: false },
+      playlist: { type: "boolean", default: false },
+      "max-videos": { type: "string" },
       lang: { type: "string" },
       provider: { type: "string" },
       model: { type: "string" },
@@ -83,6 +92,12 @@ function parseCli(argv: string[]): ParsedCli {
     throw new Error("--max-iterations måste vara ett positivt heltal");
   }
 
+  const maxVideosRaw = values["max-videos"];
+  const maxVideos = maxVideosRaw ? Number.parseInt(maxVideosRaw, 10) : undefined;
+  if (maxVideos !== undefined && (!Number.isFinite(maxVideos) || maxVideos < 1)) {
+    throw new Error("--max-videos måste vara ett positivt heltal");
+  }
+
   return {
     url: positionals[0],
     help: values.help ?? false,
@@ -90,6 +105,8 @@ function parseCli(argv: string[]): ParsedCli {
     dryRun: values["dry-run"] ?? false,
     force: values.force ?? false,
     noTranscript: values["no-transcript"] ?? false,
+    playlist: values.playlist ?? false,
+    maxVideos,
     lang: values.lang,
     provider: values.provider,
     model: values.model,
@@ -159,6 +176,136 @@ async function printProviders(): Promise<number> {
   return 0;
 }
 
+interface IngestOutcome {
+  videoId: string;
+  title: string;
+  noteName?: string;
+  skippedReason?: string;
+}
+
+export interface RunPlaylistContext {
+  url: string;
+  playlistId: string;
+  config: AppConfig;
+  cli: ParsedCli;
+  today: string;
+  notesSubdir: string;
+}
+
+/**
+ * Runs the existing single-video flow once per playlist entry, then writes a hub
+ * note. Each video gets a FRESH session, so a transcript can never leak from one
+ * video into another's note. One video failing never aborts the batch.
+ */
+async function runPlaylist(context: RunPlaylistContext): Promise<number> {
+  const { config, cli, today, notesSubdir } = context;
+
+  let items: PlaylistItem[];
+  try {
+    items = await fetchPlaylistItems(context.url, {
+      ...(cli.maxVideos ? { limit: cli.maxVideos } : {}),
+    });
+  } catch (error) {
+    process.stderr.write(`${errorMessage(error)}\n`);
+    return 1;
+  }
+
+  if (items.length === 0) {
+    process.stderr.write("Spellistan innehöll inga videor.\n");
+    return 1;
+  }
+
+  const playlistTitle = items[0]?.playlistTitle ?? `Spellista ${context.playlistId}`;
+
+  process.stdout.write(
+    `Spellista: ${playlistTitle}\n` +
+      `  ${items.length} videor — en LLM-körning per video. Ctrl-C avbryter.\n` +
+      (cli.dryRun ? "  läge: dry-run (inget skrivs)\n" : "") +
+      "\n",
+  );
+
+  const outcomes: IngestOutcome[] = [];
+
+  for (const [index, item] of items.entries()) {
+    const videoUrl = `https://www.youtube.com/watch?v=${item.videoId}`;
+    process.stdout.write(`[${index + 1}/${items.length}] ${item.videoId} … `);
+
+    try {
+      const session = createIngestSession();
+      const tools = [
+        ...createYoutubeTools({ ...(config.lang ? { lang: config.lang } : {}), session }),
+        ...createVaultTools({
+          vaultDir: config.vaultDir,
+          notesSubdir,
+          today,
+          dryRun: cli.dryRun,
+          force: cli.force,
+          session,
+          includeTranscript: !cli.noTranscript,
+        }),
+      ] as unknown as AgentTools;
+
+      const result = await runIngestAgent({
+        providerId: config.providerId,
+        modelId: config.modelId,
+        ...(config.apiKey ? { apiKey: config.apiKey } : {}),
+        systemPrompt: buildSystemPrompt({ notesSubdir, today }),
+        tools,
+        prompt: buildUserPrompt(videoUrl),
+        ...(cli.maxIterations ? { maxIterations: cli.maxIterations } : {}),
+      });
+
+      const last = toolOutputs(result.messages, "write_source_note").at(-1);
+      const path = isRecord(last) && typeof last.path === "string" ? last.path : undefined;
+      const wrote = isRecord(last) && last.written === true && path !== undefined;
+
+      if (wrote && path) {
+        const noteName = basename(path, ".md");
+        process.stdout.write(`not: ${noteName}\n`);
+        outcomes.push({ videoId: item.videoId, title: noteName, noteName });
+      } else {
+        const reason =
+          (isRecord(last) && typeof last.reason === "string" ? last.reason : undefined) ??
+          (result.error ? errorMessage(result.error) : `status ${result.status}`);
+        process.stdout.write(`hoppad: ${reason}\n`);
+        outcomes.push({ videoId: item.videoId, title: item.videoId, skippedReason: reason });
+      }
+    } catch (error) {
+      const reason = errorMessage(error);
+      process.stdout.write(`fel: ${reason}\n`);
+      outcomes.push({ videoId: item.videoId, title: item.videoId, skippedReason: reason });
+    }
+  }
+
+  let hubLine = "";
+  try {
+    const hub = await writeSourceHub({
+      vaultDir: config.vaultDir,
+      title: playlistTitle,
+      url: context.url,
+      ingested: today,
+      entries: outcomes.map((outcome) => ({
+        title: outcome.title,
+        videoId: outcome.videoId,
+        ...(outcome.noteName ? { noteName: outcome.noteName } : {}),
+        ...(outcome.skippedReason ? { skippedReason: outcome.skippedReason } : {}),
+      })),
+      dryRun: cli.dryRun,
+    });
+    hubLine = `${hub.written ? "Hub-not skriven" : "Hub-not (dry-run)"}: ${hub.path}\n`;
+  } catch (error) {
+    process.stderr.write(`Kunde inte skriva hub-noten: ${errorMessage(error)}\n`);
+  }
+
+  const written = outcomes.filter((outcome) => outcome.noteName).length;
+  process.stdout.write(
+    `\nKlart: ${written} källnot${written === 1 ? "" : "er"} skrivna, ` +
+      `${outcomes.length - written} hoppade över.\n${hubLine}`,
+  );
+
+  return written > 0 ? 0 : 1;
+}
+
 async function main(): Promise<number> {
   let cli: ParsedCli;
   try {
@@ -186,20 +333,19 @@ async function main(): Promise<number> {
     videoId = undefined;
   }
 
-  if (!videoId) {
-    process.stderr.write(
-      playlistId
-        ? `Det här är en spellista (list=${playlistId}), inte en enskild video.\n` +
-            "Spellistor stöds inte ännu — klistra in en video-URL i stället.\n"
-        : `Hittade inget YouTube-video-ID i: ${cli.url}\n`,
-    );
+  // Playlist mode: a bare playlist URL, or --playlist on a URL carrying both.
+  // Otherwise `watch?v=…&list=…` stays single-video — but says so out loud.
+  const playlistMode = playlistId !== undefined && (!videoId || cli.playlist);
+
+  if (!videoId && !playlistMode) {
+    process.stderr.write(`Hittade inget YouTube-video-ID i: ${cli.url}\n`);
     return 2;
   }
 
-  if (playlistId) {
+  if (!playlistMode && playlistId) {
     process.stderr.write(
       `OBS: URL:en innehåller en spellista (list=${playlistId}). Bara videon ` +
-        `${videoId} förs in — resten av spellistan ignoreras.\n\n`,
+        `${videoId} förs in — använd --playlist för hela spellistan.\n\n`,
     );
   }
 
@@ -247,6 +393,10 @@ async function main(): Promise<number> {
   const notesSubdir = cli.out ?? VIDEO_NOTES_SUBDIR;
   const lang = config.lang;
   const today = new Date().toISOString().slice(0, 10);
+
+  if (playlistMode && playlistId) {
+    return runPlaylist({ url: cli.url, playlistId, config, cli, today, notesSubdir });
+  }
 
   const session = createIngestSession();
   const youtubeTools = createYoutubeTools({ ...(lang ? { lang } : {}), session });

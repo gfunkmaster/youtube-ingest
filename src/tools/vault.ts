@@ -149,6 +149,19 @@ export function createVaultTools(options: VaultToolOptions) {
         // from the model — and only when it belongs to THIS video.
         const handoff = options.session?.transcript;
         const matched = handoff && handoff.videoId === videoId ? handoff : undefined;
+
+        // When a session is in play, the transcript is the note's whole reason to
+        // exist. Without it the summary could only be invented, so refuse rather
+        // than write a plausible-looking note with no source behind it.
+        if (options.session && !matched) {
+          return {
+            written: false,
+            reason:
+              "Ingen transkription hämtades för videon. Noten skulle bli påhittad — " +
+              "hoppar över i stället.",
+          };
+        }
+
         const transcript =
           options.includeTranscript === false ? undefined : matched?.text;
 
