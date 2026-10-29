@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -10,6 +10,10 @@ import { createYoutubeTools } from "../src/tools/youtube.js";
 
 const URL = "https://www.youtube.com/watch?v=45K3zHckCnQ";
 const CONTEXT = { agentId: "test", iteration: 1 };
+
+// Keep the ASR fallback off for the existing tests: they must never spawn the
+// CLI. The ASR cases below opt in with `asr: { enabled: true, run: stub }`.
+process.env.YOUTUBE_INGEST_ASR = "0";
 
 const oembedFetch: typeof globalThis.fetch = async () =>
   new Response(
@@ -258,3 +262,90 @@ describe("createVaultTools", () => {
     ).rejects.toThrow();
   });
 });
+
+describe("ASR fallback", () => {
+  /** Player response with no caption tracks: the library throws. */
+  const noCaptionsFetch: typeof globalThis.fetch = async () =>
+    new Response(JSON.stringify({ captions: {} }), { status: 200 });
+
+  function stubAsr(text = "- **00:00** Lokal ASR-text.") {
+    const calls: string[][] = [];
+    const run = async (file: string, args: readonly string[]) => {
+      calls.push([file, ...args]);
+      const outdir = args[args.indexOf("-o") + 1];
+      if (outdir === undefined) throw new Error("stub: no -o");
+      const path = join(outdir, "video.md");
+      await writeFile(path, `---\nlanguage: "sv"\n---\n\n# t\n\n${text}\n`, "utf8");
+      return {
+        code: 0,
+        stdout: `${JSON.stringify({ event: "wrote", path, format: "rendered" })}\n`,
+        stderr: "",
+      };
+    };
+    return { run, calls };
+  }
+
+  it("falls back to local ASR when the video has no captions", async () => {
+    const session = createIngestSession();
+    const asr = stubAsr();
+    const [, transcriptTool] = createYoutubeTools({
+      fetch: noCaptionsFetch,
+      session,
+      asr: { enabled: true, run: asr.run },
+    });
+
+    const result = await transcriptTool.execute({ url: URL }, CONTEXT);
+
+    expect(result).toMatchObject({ source: "asr", language: "sv", segmentCount: 1 });
+    expect((result as { text: string }).text).toContain("Lokal ASR-text");
+    expect(session.transcript?.source).toBe("asr");
+    expect(session.transcript?.text).toContain("- **00:00**");
+  });
+
+  it("prefers captions when a track exists and records that", async () => {
+    const session = createIngestSession();
+    const asr = stubAsr();
+    const [, transcriptTool] = createYoutubeTools({
+      fetch: transcriptFetch,
+      session,
+      asr: { enabled: true, run: asr.run },
+    });
+
+    const result = await transcriptTool.execute({ url: URL }, CONTEXT);
+
+    expect(result).toMatchObject({ source: "captions" });
+    expect(asr.calls).toHaveLength(0);
+    expect(session.transcript?.source).toBe("captions");
+  });
+
+  it("can be forced to ASR without reading captions at all", async () => {
+    let fetched = 0;
+    const countingFetch: typeof globalThis.fetch = async (input) => {
+      fetched += 1;
+      return transcriptFetch(input);
+    };
+    const asr = stubAsr();
+    const [, transcriptTool] = createYoutubeTools({
+      fetch: countingFetch,
+      asr: { enabled: true, force: true, run: asr.run },
+    });
+
+    const result = await transcriptTool.execute({ url: URL }, CONTEXT);
+
+    expect(result).toMatchObject({ source: "asr" });
+    expect(fetched).toBe(0);
+    expect(asr.calls).toHaveLength(1);
+  });
+
+  it("surfaces the caption error when the fallback is disabled", async () => {
+    const [, transcriptTool] = createYoutubeTools({
+      fetch: noCaptionsFetch,
+      asr: { enabled: false },
+    });
+
+    const result = await transcriptTool.execute({ url: URL }, CONTEXT);
+
+    expect(result).toEqual({ error: expect.stringContaining("transkription") });
+  });
+});
+

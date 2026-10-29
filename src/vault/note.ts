@@ -27,6 +27,8 @@ export interface SourceNoteInput {
   connections?: readonly string[];
   tags?: readonly string[];
   transcript?: string;
+  /** Where the transcript came from: caption track or local ASR. */
+  transcriptSource?: "captions" | "asr";
 }
 
 /** Characters that are unsafe in a filename on macOS/paths, or in Obsidian links. */
@@ -201,12 +203,12 @@ export function buildSourceNote(input: SourceNoteInput): string {
   }
 
   if (input.transcript && input.transcript.trim().length > 0) {
-    body.push(
-      "## Transkript",
-      "<!-- Maskinellt hämtad från YouTube:s undertextspår. Kan innehålla fel. -->",
-      input.transcript.trim(),
-      "",
-    );
+    const provenance =
+      input.transcriptSource === "asr"
+        ? "<!-- Maskinellt transkriberad lokalt med transcribe-url (Whisper). " +
+          "Tidsstämplar i mm:ss, hämtade från modellen. Kan innehålla fel. -->"
+        : "<!-- Maskinellt hämtad från YouTube:s undertextspår. Kan innehålla fel. -->";
+    body.push("## Transkript", provenance, input.transcript.trim(), "");
   }
 
   body.push("## Källa", `- ${input.url}`, "");
