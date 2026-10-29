@@ -26,6 +26,23 @@ siffror eller säkerhetsutfall"*.
 | `fetch_youtube_transcript` | Transkript som en textsträng (officiell nyckel krävs ej) | ✅ |
 | `write_source_note` | Skriver den färdiga noten (`completesRun: true`) | – |
 
+### När undertexter saknas: lokal ASR
+
+Utan undertextspår finns inget att hämta. I stället för att ge upp anropar
+`fetch_youtube_transcript` **`transcribe-url`** (lokal Whisper på Apple Silicon,
+separat repo: `~/Documents/GitHub/transcribe-url`) och använder dess markdown:
+
+- fältet `source` i resultatet är `"captions"` eller `"asr"` — noten märker
+  `## Transkript` därefter (`<!-- Maskinellt transkriberad lokalt … -->`)
+- ASR-texten behåller `- **mm:ss**`-ankare, eftersom de tidsstämplarna kommer från
+  modellen; undertextspårets tidsstämplar kastas fortfarande (opålitliga enheter)
+- det går inte att upptäcka en automatiskt översatt undertext (biblioteket
+  rapporterar bara det språk som efterfrågades) — tvinga ASR med
+  `YOUTUBE_INGEST_ASR=always` när texten är uppenbart fel
+
+Kräver att `transcribe-url` finns på `PATH` (eller `TRANSCRIBE_ASR_BIN`), annars
+faller anropet tillbaka på samma fel som förut.
+
 MCP-servern exponerar de två **rent deterministiska** uppslagen. Filskrivningen
 ligger kvar hos CLI-agenten, som känner till valvets regler och mallar.
 
@@ -144,6 +161,8 @@ baseUrl och kräver ingen nyckel.
 | `<PROVIDER>_API_KEY` | – | Nyckelvariabeln kommer från registret: `DEEPSEEK_API_KEY`, `GROQ_API_KEY`, `ANTHROPIC_API_KEY`, ... |
 | `YOUTUBE_INGEST_VAULT` | `/Users/elminnurkic/Documents/Second Brain` | Valvets rot |
 | `YOUTUBE_INGEST_LANG` | – | Föredraget transkriptspråk (tom = original/engelska) |
+| `YOUTUBE_INGEST_ASR` | – | `0` = ingen lokal ASR-fallback, `always` = hoppa över undertexter helt, tom = fallback bara när undertexter saknas |
+| `TRANSCRIBE_ASR_BIN` | `transcribe-url` | Sökväg till `transcribe-url` om den inte ligger på `PATH` |
 
 ## Utveckling
 

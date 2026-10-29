@@ -184,6 +184,7 @@ export function createVaultTools(options: VaultToolOptions) {
           ingested: options.today,
           ...(input.published ? { published: input.published } : {}),
           ...(transcript ? { transcript } : {}),
+          ...(transcript && matched?.source ? { transcriptSource: matched.source } : {}),
           ...(transcriptTruncated !== undefined ? { transcriptTruncated } : {}),
           ...(transcriptChars !== undefined ? { transcriptChars } : {}),
           ...(transcriptTotalChars !== undefined ? { transcriptTotalChars } : {}),

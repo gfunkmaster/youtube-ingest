@@ -18,6 +18,8 @@ export interface TranscriptHandoff {
   chars: number;
   /** Length of the full transcript before any cap. */
   totalChars: number;
+  /** Caption track or local ASR; drives how the note annotates the block. */
+  source?: "captions" | "asr";
 }
 
 export interface IngestSession {
